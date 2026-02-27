@@ -477,7 +477,8 @@ function bindDetail() {
 
   // provider expand/collapse
   document.querySelectorAll('.provider-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
+    chip.addEventListener('click', (e) => {
+      if (e.target.closest('.country-flag')) return;
       chip.classList.toggle('expanded');
     });
   });
