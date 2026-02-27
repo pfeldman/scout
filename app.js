@@ -257,11 +257,6 @@ function renderHome() {
       <div class="search-bar">
         <input class="search-input" type="text" placeholder="Search movies & TV shows..."
                value="${esc(state.query)}" id="searchInput" autocomplete="off">
-        <button class="search-btn" id="searchBtn" aria-label="Search">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-        </button>
       </div>
     </div>
 
@@ -459,22 +454,31 @@ function renderProviders() {
   `;
 }
 
+/* ── Debounce ── */
+let debounceTimer = null;
+
 /* ── Bind events ── */
 function bindHome() {
   const input = document.getElementById('searchInput');
-  const btn = document.getElementById('searchBtn');
 
   if (input) {
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { state.query = input.value; doSearch(); }
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      const q = input.value.trim();
+      if (!q) {
+        state.query = '';
+        state.results = filterTrending();
+        render();
+        return;
+      }
+      debounceTimer = setTimeout(() => { state.query = input.value; doSearch(); }, 300);
     });
-    // focus input if empty results and not loading
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { clearTimeout(debounceTimer); state.query = input.value; doSearch(); }
+    });
     if (!state.loading && state.results.length === 0 && state.query) {
       input.focus();
     }
-  }
-  if (btn) {
-    btn.addEventListener('click', () => { state.query = input.value; doSearch(); });
   }
 
   // toggle buttons
