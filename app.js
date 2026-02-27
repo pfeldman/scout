@@ -108,19 +108,23 @@ async function doSearch(page = 1) {
         tmdb('/search/tv', { query: q, page, include_adult: false }),
         tmdb('/search/person', { query: q, page: 1, include_adult: false }),
       ]);
+      const ql = q.toLowerCase();
       const movieResults = (movies.results || []).map(r => ({ ...r, media_type: 'movie', match_type: 'title' }));
       const tvResults = (tv.results || []).map(r => ({ ...r, media_type: 'tv', match_type: 'title' }));
       // Extract known_for works from person results
       const personWorks = extractPersonWorks(people.results || []);
-      // Merge, dedup, sort by popularity
+      // Merge, dedup, filter to real matches only, sort by popularity
       const seen = new Set();
       results = [...movieResults, ...tvResults, ...personWorks]
         .filter(r => { const k = `${r.media_type}-${r.id}`; if (seen.has(k)) return false; seen.add(k); return true; })
+        .filter(r => r.match_name || (r.title || r.name || '').toLowerCase().includes(ql))
         .sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
       totalPages = Math.max(movies.total_pages || 1, tv.total_pages || 1);
     } else {
+      const ql = q.toLowerCase();
       const data = await tmdb(`/search/${state.mediaType}`, { query: q, page, include_adult: false });
-      results = (data.results || []).map(r => ({ ...r, media_type: state.mediaType, match_type: 'title' }));
+      results = (data.results || []).map(r => ({ ...r, media_type: state.mediaType, match_type: 'title' }))
+        .filter(r => (r.title || r.name || '').toLowerCase().includes(ql));
       totalPages = data.total_pages || 1;
     }
     state.results = results;
