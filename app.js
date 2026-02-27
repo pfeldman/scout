@@ -70,11 +70,17 @@ window.addEventListener('hashchange', () => render());
 window.addEventListener('popstate', () => render());
 
 /* ── Person → works helper ── */
+const DEPT_LABELS = {
+  acting: 'Actor', directing: 'Director', writing: 'Writer',
+  production: 'Producer', editing: 'Editor', camera: 'Cinematographer',
+  sound: 'Composer', art: 'Art', 'visual effects': 'VFX',
+};
+
 function extractPersonWorks(people) {
   const works = [];
   for (const person of people) {
     const dept = (person.known_for_department || '').toLowerCase();
-    const label = dept === 'directing' ? 'director' : 'actor';
+    const label = DEPT_LABELS[dept] || 'Cast';
     for (const w of (person.known_for || [])) {
       if (w.media_type !== 'movie' && w.media_type !== 'tv') continue;
       works.push({
@@ -160,8 +166,8 @@ async function loadDetail(mediaType, id) {
   state.providersLoading = true;
   render();
   try {
-    // Load detail info first so we can show it immediately
-    const detail = await tmdb(`/${mediaType}/${id}`);
+    // Load detail + credits first so we can show it immediately
+    const detail = await tmdb(`/${mediaType}/${id}`, { append_to_response: 'credits' });
     detail.media_type = mediaType;
     state.detail = detail;
     render();
@@ -310,7 +316,8 @@ function renderCard(r) {
       </div>
       <div class="result-title">${esc(title)}</div>
       ${year ? `<div class="result-year">${year}</div>` : ''}
-      ${r.match_name ? `<div class="result-match">${esc(r.match_name)} · <span>${r.match_type === 'director' ? 'Director' : 'Actor'}</span></div>` : ''}
+      ${r.match_name ? `<div class="result-match">${esc(r.match_name)} · <span>${esc(r.match_type)}</span></div>`
+        : r.match_type === 'title' ? `<div class="result-match"><span>Title match</span></div>` : ''}
     </div>
   `;
 }
@@ -421,11 +428,60 @@ function renderDetail() {
           </div>
         ` : ''}
 
+        ${renderCredits(d)}
+
         <div class="section">
           <h3 class="section-title">Where to Watch</h3>
           ${renderProviders()}
         </div>
       </div>
+    </div>
+  `;
+}
+
+function renderCredits(d) {
+  const credits = d.credits;
+  if (!credits) return '';
+  const directors = (credits.crew || []).filter(c => c.job === 'Director');
+  const cast = (credits.cast || []).slice(0, 8);
+  if (!directors.length && !cast.length) return '';
+
+  return `
+    <div class="section">
+      <h3 class="section-title">Cast & Crew</h3>
+      ${directors.length ? `
+        <div class="credits-group">
+          <div class="credits-label">Director${directors.length > 1 ? 's' : ''}</div>
+          <div class="credits-row">
+            ${directors.map(p => renderCreditPerson(p, null)).join('')}
+          </div>
+        </div>
+      ` : ''}
+      ${cast.length ? `
+        <div class="credits-group">
+          <div class="credits-label">Cast</div>
+          <div class="credits-row">
+            ${cast.map(p => renderCreditPerson(p, p.character)).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderCreditPerson(p, role) {
+  const photo = p.profile_path ? `${IMG_BASE}/w185${p.profile_path}` : '';
+  return `
+    <div class="credit-person">
+      <div class="credit-photo">
+        ${photo ? `<img src="${photo}" alt="${esc(p.name)}" loading="lazy">` : `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 12 0v1"/>
+          </svg>
+        `}
+      </div>
+      <div class="credit-name">${esc(p.name)}</div>
+      ${role ? `<div class="credit-role">${esc(role)}</div>` : ''}
     </div>
   `;
 }
