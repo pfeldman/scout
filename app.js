@@ -43,6 +43,7 @@ let state = {
   page: 1,
   totalPages: 0,
   loading: false,
+  detailLoading: false,  // guard: prevents re-triggering loadDetail
   detail: null,          // full detail object when viewing
   providers: null,       // streaming providers for detail
   providersLoading: false,
@@ -114,24 +115,26 @@ async function loadTrending() {
 
 /* ── Load detail ── */
 async function loadDetail(mediaType, id) {
+  state.detailLoading = true;
   state.detail = null;
   state.providers = null;
   state.providersLoading = true;
   render();
   try {
-    const [detail, provData] = await Promise.all([
-      tmdb(`/${mediaType}/${id}`),
-      tmdb(`/${mediaType}/${id}/watch/providers`),
-    ]);
+    // Load detail info first so we can show it immediately
+    const detail = await tmdb(`/${mediaType}/${id}`);
     detail.media_type = mediaType;
     state.detail = detail;
-    // aggregate providers
+    render();
+    // Then load providers in the background
+    const provData = await tmdb(`/${mediaType}/${id}/watch/providers`);
     state.providers = aggregateProviders(provData.results || {});
   } catch (e) {
-    toast('Failed to load details');
+    if (!state.detail) toast('Failed to load details');
     console.error(e);
   }
   state.providersLoading = false;
+  state.detailLoading = false;
   render();
 }
 
@@ -181,7 +184,9 @@ function render() {
   const app = document.getElementById('app');
 
   if (route.screen === 'detail') {
-    if (!state.detail || String(state.detail.id) !== route.id || state.detail.media_type !== route.mediaType) {
+    const needsLoad = !state.detailLoading &&
+      (!state.detail || String(state.detail.id) !== route.id || state.detail.media_type !== route.mediaType);
+    if (needsLoad) {
       loadDetail(route.mediaType, route.id);
     }
     app.innerHTML = renderDetail();
@@ -304,13 +309,12 @@ function renderPagination() {
 
 /* ── Detail screen ── */
 function renderDetail() {
-  if (state.providersLoading || !state.detail) {
+  if (!state.detail) {
     return `
-      <div class="header">
+      <div class="detail-header">
         <button class="back-btn" id="backBtn" aria-label="Back">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
         </button>
-        <div></div>
       </div>
       <div class="loading"><div class="spinner"></div><span>Loading...</span></div>
     `;
@@ -330,11 +334,10 @@ function renderDetail() {
 
   return `
     <div class="detail-screen${backdrop ? '' : ' detail-no-hero'}">
-      <div class="header">
+      <div class="detail-header">
         <button class="back-btn" id="backBtn" aria-label="Back">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
         </button>
-        <div></div>
       </div>
 
       ${backdrop ? `
@@ -393,6 +396,9 @@ function renderDetail() {
 }
 
 function renderProviders() {
+  if (state.providersLoading) {
+    return '<div class="loading"><div class="spinner"></div><span>Loading availability...</span></div>';
+  }
   const providers = state.providers;
   if (!providers || providers.length === 0) {
     return '<p class="no-providers">No streaming availability found.</p>';
