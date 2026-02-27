@@ -77,17 +77,25 @@ async function doSearch(page = 1) {
   state.page = page;
   render();
   try {
-    let data;
+    let results, totalPages;
     if (state.mediaType === 'multi') {
-      data = await tmdb('/search/multi', { query: q, page, include_adult: false });
-      // filter to movie and tv only
-      data.results = (data.results || []).filter(r => r.media_type === 'movie' || r.media_type === 'tv');
+      // Search movies and TV in parallel for better results than /search/multi
+      const [movies, tv] = await Promise.all([
+        tmdb('/search/movie', { query: q, page, include_adult: false }),
+        tmdb('/search/tv', { query: q, page, include_adult: false }),
+      ]);
+      const movieResults = (movies.results || []).map(r => ({ ...r, media_type: 'movie' }));
+      const tvResults = (tv.results || []).map(r => ({ ...r, media_type: 'tv' }));
+      // Merge and sort by popularity
+      results = [...movieResults, ...tvResults].sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+      totalPages = Math.max(movies.total_pages || 1, tv.total_pages || 1);
     } else {
-      data = await tmdb(`/search/${state.mediaType}`, { query: q, page, include_adult: false });
-      data.results = (data.results || []).map(r => ({ ...r, media_type: state.mediaType }));
+      const data = await tmdb(`/search/${state.mediaType}`, { query: q, page, include_adult: false });
+      results = (data.results || []).map(r => ({ ...r, media_type: state.mediaType }));
+      totalPages = data.total_pages || 1;
     }
-    state.results = data.results;
-    state.totalPages = Math.min(data.total_pages || 1, 500);
+    state.results = results;
+    state.totalPages = Math.min(totalPages, 500);
   } catch (e) {
     toast('Search failed');
     console.error(e);
