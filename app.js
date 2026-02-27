@@ -128,12 +128,15 @@ async function doSearch(page = 1) {
 }
 
 /* ── Load trending ── */
+let trendingAll = []; // cache unfiltered trending results
+
 async function loadTrending() {
   state.loading = true;
   render();
   try {
     const data = await tmdb('/trending/all/week');
-    state.results = (data.results || []).filter(r => r.media_type === 'movie' || r.media_type === 'tv');
+    trendingAll = (data.results || []).filter(r => r.media_type === 'movie' || r.media_type === 'tv');
+    state.results = filterTrending();
     state.totalPages = 1;
     state.page = 1;
     state.query = '';
@@ -142,6 +145,11 @@ async function loadTrending() {
   }
   state.loading = false;
   render();
+}
+
+function filterTrending() {
+  if (state.mediaType === 'multi') return trendingAll;
+  return trendingAll.filter(r => r.media_type === state.mediaType);
 }
 
 /* ── Load detail ── */
@@ -474,7 +482,7 @@ function bindHome() {
     b.addEventListener('click', () => {
       state.mediaType = b.dataset.type;
       if (state.query.trim()) doSearch();
-      else { render(); }
+      else { state.results = filterTrending(); render(); }
     });
   });
 
