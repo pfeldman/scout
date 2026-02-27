@@ -317,7 +317,8 @@ function renderCard(r) {
       <div class="result-title">${esc(title)}</div>
       ${year ? `<div class="result-year">${year}</div>` : ''}
       ${r.match_name ? `<div class="result-match">${esc(r.match_name)} · <span>${esc(r.match_type)}</span></div>`
-        : r.match_type === 'title' ? `<div class="result-match"><span>Title match</span></div>` : ''}
+        : r.match_type === 'title' && state.query && title.toLowerCase().includes(state.query.toLowerCase())
+          ? `<div class="result-match"><span>Title match</span></div>` : ''}
     </div>
   `;
 }
