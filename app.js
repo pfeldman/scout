@@ -69,6 +69,24 @@ function getRoute() {
 window.addEventListener('hashchange', () => render());
 window.addEventListener('popstate', () => render());
 
+/* ── Person → works helper ── */
+function extractPersonWorks(people) {
+  const works = [];
+  for (const person of people) {
+    const dept = (person.known_for_department || '').toLowerCase();
+    const label = dept === 'directing' ? 'director' : 'actor';
+    for (const w of (person.known_for || [])) {
+      if (w.media_type !== 'movie' && w.media_type !== 'tv') continue;
+      works.push({
+        ...w,
+        match_type: label,
+        match_name: person.name,
+      });
+    }
+  }
+  return works;
+}
+
 /* ── Search ── */
 async function doSearch(page = 1) {
   const q = state.query.trim();
@@ -79,19 +97,24 @@ async function doSearch(page = 1) {
   try {
     let results, totalPages;
     if (state.mediaType === 'multi') {
-      // Search movies and TV in parallel for better results than /search/multi
-      const [movies, tv] = await Promise.all([
+      const [movies, tv, people] = await Promise.all([
         tmdb('/search/movie', { query: q, page, include_adult: false }),
         tmdb('/search/tv', { query: q, page, include_adult: false }),
+        tmdb('/search/person', { query: q, page: 1, include_adult: false }),
       ]);
-      const movieResults = (movies.results || []).map(r => ({ ...r, media_type: 'movie' }));
-      const tvResults = (tv.results || []).map(r => ({ ...r, media_type: 'tv' }));
-      // Merge and sort by popularity
-      results = [...movieResults, ...tvResults].sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+      const movieResults = (movies.results || []).map(r => ({ ...r, media_type: 'movie', match_type: 'title' }));
+      const tvResults = (tv.results || []).map(r => ({ ...r, media_type: 'tv', match_type: 'title' }));
+      // Extract known_for works from person results
+      const personWorks = extractPersonWorks(people.results || []);
+      // Merge, dedup, sort by popularity
+      const seen = new Set();
+      results = [...movieResults, ...tvResults, ...personWorks]
+        .filter(r => { const k = `${r.media_type}-${r.id}`; if (seen.has(k)) return false; seen.add(k); return true; })
+        .sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
       totalPages = Math.max(movies.total_pages || 1, tv.total_pages || 1);
     } else {
       const data = await tmdb(`/search/${state.mediaType}`, { query: q, page, include_adult: false });
-      results = (data.results || []).map(r => ({ ...r, media_type: state.mediaType }));
+      results = (data.results || []).map(r => ({ ...r, media_type: state.mediaType, match_type: 'title' }));
       totalPages = data.total_pages || 1;
     }
     state.results = results;
@@ -284,6 +307,7 @@ function renderCard(r) {
       </div>
       <div class="result-title">${esc(title)}</div>
       ${year ? `<div class="result-year">${year}</div>` : ''}
+      ${r.match_name ? `<div class="result-match">${esc(r.match_name)} · <span>${r.match_type === 'director' ? 'Director' : 'Actor'}</span></div>` : ''}
     </div>
   `;
 }

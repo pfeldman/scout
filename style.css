@@ -323,6 +323,17 @@ button {
   margin-top: 2px;
 }
 
+.result-match {
+  font-size: 0.7rem;
+  color: var(--accent);
+  margin-top: 3px;
+  line-height: 1.3;
+}
+
+.result-match span {
+  color: var(--text-tertiary);
+}
+
 /* ── Loading ── */
 .loading {
   display: flex;
