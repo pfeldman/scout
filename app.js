@@ -122,9 +122,18 @@ async function doSearch(page = 1) {
       totalPages = Math.max(movies.total_pages || 1, tv.total_pages || 1);
     } else {
       const ql = q.toLowerCase();
-      const data = await tmdb(`/search/${state.mediaType}`, { query: q, page, include_adult: false });
-      results = (data.results || []).map(r => ({ ...r, media_type: state.mediaType, match_type: 'title' }))
-        .filter(r => (r.title || r.name || '').toLowerCase().includes(ql));
+      const [data, people] = await Promise.all([
+        tmdb(`/search/${state.mediaType}`, { query: q, page, include_adult: false }),
+        tmdb('/search/person', { query: q, page: 1, include_adult: false }),
+      ]);
+      const titleResults = (data.results || []).map(r => ({ ...r, media_type: state.mediaType, match_type: 'title' }));
+      const personWorks = extractPersonWorks(people.results || [])
+        .filter(r => r.media_type === state.mediaType);
+      const seen = new Set();
+      results = [...titleResults, ...personWorks]
+        .filter(r => { const k = `${r.media_type}-${r.id}`; if (seen.has(k)) return false; seen.add(k); return true; })
+        .filter(r => r.match_name || (r.title || r.name || '').toLowerCase().includes(ql))
+        .sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
       totalPages = data.total_pages || 1;
     }
     state.results = results;
