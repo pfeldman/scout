@@ -541,7 +541,7 @@ function bindHome() {
         render();
         return;
       }
-      debounceTimer = setTimeout(() => { state.query = input.value; doSearch(); }, 300);
+      debounceTimer = setTimeout(() => { state.query = input.value; doSearch(); }, 1000);
     });
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter') { clearTimeout(debounceTimer); state.query = input.value; doSearch(); }
