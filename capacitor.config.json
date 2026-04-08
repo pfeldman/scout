@@ -1,0 +1,10 @@
+{
+  "appId": "com.pieve.scout",
+  "appName": "Scout",
+  "webDir": ".",
+  "server": {
+    "url": "https://scout-nu.vercel.app",
+    "cleartext": false,
+    "allowNavigation": ["*"]
+  }
+}
