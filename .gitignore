@@ -1,1 +1,4 @@
-node_modules/\nios/\nandroid/\n.vercel
+node_modules/
+ios/
+android/
+.vercel
