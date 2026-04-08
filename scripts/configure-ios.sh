@@ -2,7 +2,7 @@
 INFO_PLIST="ios/App/App/Info.plist"
 
 # === App Icon ===
-ICON_SRC="icons/icon-512.png"
+ICON_SRC="public/icons/icon-512.png"
 ICON_DST="ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png"
 if [ -f "$ICON_SRC" ]; then
   sips -z 1024 1024 "$ICON_SRC" --out /tmp/icon_resized.png > /dev/null 2>&1
