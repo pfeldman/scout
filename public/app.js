@@ -2,9 +2,6 @@ const TMDB_KEY = "b175ef95d9831a20297ff0f1034c32fe";
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE = "https://image.tmdb.org/t/p";
 
-/* ── Shelf (Linker) API ── */
-const SHELF_API_BASE = "https://pieve-linker-e2a788104640.herokuapp.com";
-const SHELF_API_KEY = "bH3KqE-TQIzFOc6jHFM3XghkdwB_G5j5QQIc1njsKTo";
 
 /* ── Country code → flag emoji ── */
 function countryFlag(code) {
@@ -217,24 +214,6 @@ function aggregateProviders(allCountries) {
   return result;
 }
 
-/* ── Add to Shelf ── */
-async function addToShelf() {
-  const d = state.detail;
-  if (!d) return;
-  const tmdbUrl = `https://www.themoviedb.org/${d.media_type}/${d.id}`;
-  try {
-    const res = await fetch(`${SHELF_API_BASE}/api/links`, {
-      method: 'POST',
-      headers: { 'X-API-Key': SHELF_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: tmdbUrl }),
-    });
-    if (!res.ok) throw new Error(`API ${res.status}`);
-    toast('Added to Shelf!');
-  } catch (e) {
-    toast('Failed to add to Shelf');
-    console.error(e);
-  }
-}
 
 /* ── Render ── */
 function render() {
@@ -422,13 +401,6 @@ function renderDetail() {
           </div>
         </div>
 
-        <button class="btn btn-accent add-shelf-btn" id="addShelfBtn">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
-          Add to Shelf
-        </button>
-
         ${genres.length ? `
           <div class="genre-tags">
             ${genres.map(g => `<span class="genre-tag">${esc(g)}</span>`).join('')}
@@ -581,12 +553,6 @@ function bindDetail() {
     back.addEventListener('click', () => {
       history.back();
     });
-  }
-
-  // add to shelf
-  const addBtn = document.getElementById('addShelfBtn');
-  if (addBtn) {
-    addBtn.addEventListener('click', () => addToShelf());
   }
 
   // provider expand/collapse
