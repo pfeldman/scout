@@ -1,4 +1,4 @@
-const CACHE_NAME = 'scout-v11';
+const CACHE_NAME = 'scout-v12';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

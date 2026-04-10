@@ -32,6 +32,55 @@ async function tmdb(path, params = {}) {
   return res.json();
 }
 
+/* ── Watchlist (localStorage) ── */
+const WL_KEY = 'scout_watchlist';
+
+function getWatchlist() {
+  try { return JSON.parse(localStorage.getItem(WL_KEY)) || []; }
+  catch { return []; }
+}
+
+function saveWatchlist(list) {
+  localStorage.setItem(WL_KEY, JSON.stringify(list));
+}
+
+function addToWatchlist(item) {
+  const list = getWatchlist();
+  if (list.some(w => w.id === item.id && w.media_type === item.media_type)) return;
+  list.unshift({
+    id: item.id,
+    media_type: item.media_type,
+    title: item.title || item.name || 'Untitled',
+    year: (item.release_date || item.first_air_date || '').slice(0, 4),
+    poster_path: item.poster_path || null,
+    rating: item.vote_average ? item.vote_average.toFixed(1) : '',
+    added_at: Date.now(),
+    watched: false,
+  });
+  saveWatchlist(list);
+}
+
+function removeFromWatchlist(id, mediaType) {
+  const list = getWatchlist().filter(w => !(w.id === id && w.media_type === mediaType));
+  saveWatchlist(list);
+}
+
+function isInWatchlist(id, mediaType) {
+  return getWatchlist().some(w => w.id === id && w.media_type === mediaType);
+}
+
+function toggleWatched(id, mediaType) {
+  const list = getWatchlist();
+  const item = list.find(w => w.id === id && w.media_type === mediaType);
+  if (item) item.watched = !item.watched;
+  saveWatchlist(list);
+}
+
+function isWatched(id, mediaType) {
+  const item = getWatchlist().find(w => w.id === id && w.media_type === mediaType);
+  return item ? !!item.watched : false;
+}
+
 /* ── State ── */
 let state = {
   query: '',
@@ -44,6 +93,8 @@ let state = {
   detail: null,          // full detail object when viewing
   providers: null,       // streaming providers for detail
   providersLoading: false,
+  watchlistFilter: 'all',       // all | movie | tv
+  watchlistStatusFilter: 'all', // all | to-watch | watched
 };
 
 /* ── Toast ── */
@@ -58,6 +109,7 @@ function toast(msg) {
 function getRoute() {
   const hash = location.hash || '#/';
   if (hash === '#/') return { screen: 'home' };
+  if (hash === '#/watchlist') return { screen: 'watchlist' };
   const m = hash.match(/^#\/(movie|tv)\/(\d+)$/);
   if (m) return { screen: 'detail', mediaType: m[1], id: m[2] };
   return { screen: 'home' };
@@ -231,6 +283,12 @@ function render() {
     return;
   }
 
+  if (route.screen === 'watchlist') {
+    app.innerHTML = renderWatchlist();
+    bindWatchlist();
+    return;
+  }
+
   // Home / search screen
   if (state.results.length === 0 && !state.loading && !state.query) {
     loadTrending();
@@ -243,11 +301,20 @@ function render() {
 /* ── Home screen ── */
 function renderHome() {
   const isSearch = state.query.trim().length > 0;
+  const wlCount = getWatchlist().length;
   return `
     <div class="header">
       <div>
         <h1>Scout</h1>
         <div class="header-subtitle">Movies & TV</div>
+      </div>
+      <div class="header-right">
+        <button class="btn-icon watchlist-nav-btn" id="goWatchlist" aria-label="Watchlist">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+          </svg>
+          ${wlCount > 0 ? `<span class="wl-badge">${wlCount}</span>` : ''}
+        </button>
       </div>
     </div>
 
@@ -373,6 +440,20 @@ function renderDetail() {
         <button class="back-btn" id="backBtn" aria-label="Back">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
         </button>
+        <div class="detail-header-actions">
+          <button class="btn-icon wl-toggle-btn${isInWatchlist(d.id, d.media_type) ? ' in-watchlist' : ''}" id="wlToggle" aria-label="Toggle watchlist">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="${isInWatchlist(d.id, d.media_type) ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+          ${isInWatchlist(d.id, d.media_type) ? `
+          <button class="btn-icon watched-toggle-btn${isWatched(d.id, d.media_type) ? ' is-watched' : ''}" id="watchedToggle" aria-label="Mark as watched">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              ${isWatched(d.id, d.media_type) ? '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' : '<circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/>'}
+            </svg>
+          </button>
+          ` : ''}
+        </div>
       </div>
 
       ${backdrop ? `
@@ -423,6 +504,144 @@ function renderDetail() {
       </div>
     </div>
   `;
+}
+
+/* ── Watchlist screen ── */
+function renderWatchlist() {
+  const all = getWatchlist();
+  const typeFilter = state.watchlistFilter;
+  const statusFilter = state.watchlistStatusFilter;
+  let items = all;
+  if (typeFilter === 'movie') items = items.filter(w => w.media_type === 'movie');
+  if (typeFilter === 'tv') items = items.filter(w => w.media_type === 'tv');
+  if (statusFilter === 'to-watch') items = items.filter(w => !w.watched);
+  if (statusFilter === 'watched') items = items.filter(w => !!w.watched);
+
+  const movieCount = all.filter(w => w.media_type === 'movie').length;
+  const tvCount = all.filter(w => w.media_type === 'tv').length;
+  const watchedCount = all.filter(w => !!w.watched).length;
+
+  return `
+    <div class="header">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="back-btn" id="wlBackBtn" aria-label="Back">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <div>
+          <h1>Watchlist</h1>
+          <div class="header-subtitle">${all.length} title${all.length !== 1 ? 's' : ''}${watchedCount > 0 ? ` \u00b7 ${watchedCount} watched` : ''}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toggle-bar">
+      <button class="toggle-btn ${typeFilter==='all'?'active':''}" data-wltype="all">All</button>
+      <button class="toggle-btn ${typeFilter==='movie'?'active':''}" data-wltype="movie">Movies${movieCount ? ` (${movieCount})` : ''}</button>
+      <button class="toggle-btn ${typeFilter==='tv'?'active':''}" data-wltype="tv">TV${tvCount ? ` (${tvCount})` : ''}</button>
+    </div>
+
+    <div class="toggle-bar wl-status-bar">
+      <button class="toggle-btn ${statusFilter==='all'?'active':''}" data-wlstatus="all">All</button>
+      <button class="toggle-btn ${statusFilter==='to-watch'?'active':''}" data-wlstatus="to-watch">To Watch</button>
+      <button class="toggle-btn ${statusFilter==='watched'?'active':''}" data-wlstatus="watched">Watched</button>
+    </div>
+
+    ${items.length === 0 ? `
+      <div class="empty-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        </svg>
+        ${all.length === 0
+          ? '<p>Your watchlist is empty.<br>Save movies and TV shows to watch later.</p>'
+          : '<p>No matches for this filter.</p>'
+        }
+      </div>
+    ` : `
+      <div class="results-grid">
+        ${items.map(w => renderWatchlistCard(w)).join('')}
+      </div>
+    `}
+  `;
+}
+
+function renderWatchlistCard(w) {
+  const poster = w.poster_path ? `${IMG_BASE}/w342${w.poster_path}` : '';
+  const type = w.media_type === 'movie' ? 'Movie' : 'TV';
+
+  return `
+    <div class="result-card wl-card" data-type="${w.media_type}" data-id="${w.id}">
+      <div class="poster-frame">
+        ${poster ? `<img src="${poster}" alt="${esc(w.title)}" loading="lazy">` : `
+          <div class="poster-fallback">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 2v20M17 2v20M2 12h20"/>
+            </svg>
+          </div>
+        `}
+        <span class="badge-type">${type}</span>
+        ${w.rating ? `<span class="badge-rating">\u2605 ${w.rating}</span>` : ''}
+        ${w.watched ? '<span class="badge-watched">\u2713</span>' : ''}
+        <button class="wl-remove-btn" data-remove-id="${w.id}" data-remove-type="${w.media_type}" aria-label="Remove from watchlist">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="result-title">${esc(w.title)}</div>
+      ${w.year ? `<div class="result-year">${w.year}</div>` : ''}
+    </div>
+  `;
+}
+
+function bindWatchlist() {
+  // Back button
+  const back = document.getElementById('wlBackBtn');
+  if (back) back.addEventListener('click', () => { location.hash = '#/'; });
+
+  // Type filter
+  document.querySelectorAll('[data-wltype]').forEach(b => {
+    b.addEventListener('click', () => {
+      state.watchlistFilter = b.dataset.wltype;
+      render();
+    });
+  });
+
+  // Status filter
+  document.querySelectorAll('[data-wlstatus]').forEach(b => {
+    b.addEventListener('click', () => {
+      state.watchlistStatusFilter = b.dataset.wlstatus;
+      render();
+    });
+  });
+
+  // Card navigation (but not the remove button)
+  document.querySelectorAll('.wl-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.wl-remove-btn')) return;
+      location.hash = `#/${card.dataset.type}/${card.dataset.id}`;
+    });
+  });
+
+  // Remove buttons
+  document.querySelectorAll('.wl-remove-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = Number(btn.dataset.removeId);
+      const type = btn.dataset.removeType;
+      // Animate card out
+      const card = btn.closest('.wl-card');
+      if (card) {
+        card.style.transition = 'opacity 0.25s ease, transform 0.25s ease';
+        card.style.opacity = '0';
+        card.style.transform = 'scale(0.9)';
+      }
+      setTimeout(() => {
+        removeFromWatchlist(id, type);
+        toast('Removed from watchlist');
+        render();
+      }, 250);
+    });
+  });
 }
 
 function renderCredits(d) {
@@ -501,6 +720,10 @@ let debounceTimer = null;
 
 /* ── Bind events ── */
 function bindHome() {
+  // Watchlist nav button
+  const wlBtn = document.getElementById('goWatchlist');
+  if (wlBtn) wlBtn.addEventListener('click', () => { location.hash = '#/watchlist'; });
+
   const input = document.getElementById('searchInput');
 
   if (input) {
@@ -552,6 +775,33 @@ function bindDetail() {
   if (back) {
     back.addEventListener('click', () => {
       history.back();
+    });
+  }
+
+  // Watchlist toggle
+  const wlToggle = document.getElementById('wlToggle');
+  if (wlToggle && state.detail) {
+    wlToggle.addEventListener('click', () => {
+      const d = state.detail;
+      if (isInWatchlist(d.id, d.media_type)) {
+        removeFromWatchlist(d.id, d.media_type);
+        toast('Removed from watchlist');
+      } else {
+        addToWatchlist(d);
+        toast('Added to watchlist');
+      }
+      render();
+    });
+  }
+
+  // Watched toggle
+  const watchedToggle = document.getElementById('watchedToggle');
+  if (watchedToggle && state.detail) {
+    watchedToggle.addEventListener('click', () => {
+      const d = state.detail;
+      toggleWatched(d.id, d.media_type);
+      toast(isWatched(d.id, d.media_type) ? 'Marked as watched' : 'Marked as unwatched');
+      render();
     });
   }
 
