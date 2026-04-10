@@ -2,6 +2,7 @@
   "appId": "com.pieve.scout",
   "appName": "Scout",
   "webDir": "public",
+  "backgroundColor": "#1a1814",
   "server": {
     "url": "https://scout-nu.vercel.app",
     "cleartext": false,
