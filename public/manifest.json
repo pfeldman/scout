@@ -4,8 +4,8 @@
   "description": "Search movies & TV shows, find where to watch",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#1a1814",
-  "theme_color": "#1a1814",
+  "background_color": "#07161A",
+  "theme_color": "#07161A",
   "orientation": "portrait",
   "icons": [
     {

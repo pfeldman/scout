@@ -2,6 +2,11 @@ const TMDB_KEY = "b175ef95d9831a20297ff0f1034c32fe";
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE = "https://image.tmdb.org/t/p";
 
+/* ── Theme: follows the system, can be pinned with ?theme=dark|light ── */
+(function pinTheme() {
+  const t = new URLSearchParams(location.search).get('theme');
+  if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+})();
 
 /* ── Country code → flag emoji ── */
 function countryFlag(code) {
@@ -11,6 +16,13 @@ function countryFlag(code) {
 const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
 function countryName(code) {
   try { return countryNames.of(code.toUpperCase()); } catch { return code; }
+}
+
+const dateFmt = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+function longDate(iso) {
+  if (!iso) return '';
+  const d = new Date(`${iso}T00:00:00Z`);
+  return isNaN(d) ? iso : dateFmt.format(d);
 }
 
 /* ── TMDB genre map (movie + tv combined) ── */
@@ -85,16 +97,39 @@ function isWatched(id, mediaType) {
 let state = {
   query: '',
   mediaType: 'multi',   // multi | movie | tv
+  genre: null,          // trending genre filter (TMDB genre id)
   results: [],
+  people: [],           // people matched by a search
   page: 1,
   totalPages: 0,
   loading: false,
+  trendingFailed: false,
+  searchFocused: false,
   detailLoading: false,  // guard: prevents re-triggering loadDetail
   detail: null,          // full detail object when viewing
   providers: null,       // streaming providers for detail
   providersLoading: false,
+  overviewOpen: false,
+  person: null,          // full person object when viewing
+  personLoading: false,
+  personFilter: 'all',   // all | movie | tv
+  personLimit: 40,
+  bioOpen: false,
   watchlistFilter: 'all',       // all | movie | tv
   watchlistStatusFilter: 'all', // all | to-watch | watched
+};
+
+/* ── Icons ── */
+const ICON = {
+  back: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+  bookmark: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
+  bookmarkFill: '<svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
+  seen: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><polyline points="8.5 12 11 14.5 15.5 9.5"/></svg>',
+  seenFill: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 11.2V12a9.5 9.5 0 1 1-5.6-8.7"/><polyline points="22 4.5 12 14.5 9 11.5"/></svg>',
+  tick: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12.5 9.5 18 20 6.5"/></svg>',
+  close: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  frame: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="19" height="17" rx="2"/><path d="M7.5 3.5v17M16.5 3.5v17M2.5 12h19"/></svg>',
+  head: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="12" cy="8.5" r="4"/><path d="M4 21v-1.2A6.8 6.8 0 0 1 10.8 13h2.4A6.8 6.8 0 0 1 20 19.8V21"/></svg>',
 };
 
 /* ── Toast ── */
@@ -102,7 +137,8 @@ function toast(msg) {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2500);
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 2400);
 }
 
 /* ── Routing ── */
@@ -112,11 +148,29 @@ function getRoute() {
   if (hash === '#/watchlist') return { screen: 'watchlist' };
   const m = hash.match(/^#\/(movie|tv)\/(\d+)$/);
   if (m) return { screen: 'detail', mediaType: m[1], id: m[2] };
+  const p = hash.match(/^#\/person\/(\d+)$/);
+  if (p) return { screen: 'person', id: p[1] };
   return { screen: 'home' };
 }
 
-window.addEventListener('hashchange', () => render());
+/* Each screen remembers where you were, so stepping back down a chain of
+   people and titles returns you to the row you left, not to the top. */
+const scrollMem = new Map();
+let currentHash = location.hash || '#/';
+
+window.addEventListener('hashchange', () => {
+  scrollMem.set(currentHash, window.scrollY);
+  currentHash = location.hash || '#/';
+  render();
+  const y = scrollMem.get(currentHash) || 0;
+  requestAnimationFrame(() => window.scrollTo(0, y));
+});
+
 window.addEventListener('popstate', () => render());
+
+function go(hash) {
+  location.hash = hash;
+}
 
 /* ── Person → works helper ── */
 const DEPT_LABELS = {
@@ -136,6 +190,7 @@ function extractPersonWorks(people) {
         ...w,
         match_type: label,
         match_name: person.name,
+        match_person_id: person.id,
       });
     }
   }
@@ -151,13 +206,13 @@ async function doSearch(page = 1) {
   render();
   try {
     let results, totalPages;
+    const ql = q.toLowerCase();
     if (state.mediaType === 'multi') {
       const [movies, tv, people] = await Promise.all([
         tmdb('/search/movie', { query: q, page, include_adult: false }),
         tmdb('/search/tv', { query: q, page, include_adult: false }),
         tmdb('/search/person', { query: q, page: 1, include_adult: false }),
       ]);
-      const ql = q.toLowerCase();
       const movieResults = (movies.results || []).map(r => ({ ...r, media_type: 'movie', match_type: 'title' }));
       const tvResults = (tv.results || []).map(r => ({ ...r, media_type: 'tv', match_type: 'title' }));
       // Extract known_for works from person results
@@ -169,8 +224,8 @@ async function doSearch(page = 1) {
         .filter(r => r.match_name || (r.title || r.name || '').toLowerCase().includes(ql))
         .sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
       totalPages = Math.max(movies.total_pages || 1, tv.total_pages || 1);
+      state.people = matchedPeople(people.results || [], ql);
     } else {
-      const ql = q.toLowerCase();
       const [data, people] = await Promise.all([
         tmdb(`/search/${state.mediaType}`, { query: q, page, include_adult: false }),
         tmdb('/search/person', { query: q, page: 1, include_adult: false }),
@@ -184,15 +239,23 @@ async function doSearch(page = 1) {
         .filter(r => r.match_name || (r.title || r.name || '').toLowerCase().includes(ql))
         .sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
       totalPages = data.total_pages || 1;
+      state.people = matchedPeople(people.results || [], ql);
     }
     state.results = results;
     state.totalPages = Math.min(totalPages, 500);
   } catch (e) {
-    toast('Search failed');
+    toast('Search failed. Check the connection and try again.');
     console.error(e);
   }
   state.loading = false;
   render();
+}
+
+function matchedPeople(people, ql) {
+  return people
+    .filter(p => (p.name || '').toLowerCase().includes(ql))
+    .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
+    .slice(0, 12);
 }
 
 /* ── Load trending ── */
@@ -204,20 +267,42 @@ async function loadTrending() {
   try {
     const data = await tmdb('/trending/all/week');
     trendingAll = (data.results || []).filter(r => r.media_type === 'movie' || r.media_type === 'tv');
+    state.trendingFailed = false;
     state.results = filterTrending();
     state.totalPages = 1;
     state.page = 1;
     state.query = '';
+    state.people = [];
   } catch (e) {
     console.error(e);
+    state.trendingFailed = true;
+    toast('Could not reach TMDB. Reload to try again.');
   }
   state.loading = false;
   render();
 }
 
 function filterTrending() {
-  if (state.mediaType === 'multi') return trendingAll;
-  return trendingAll.filter(r => r.media_type === state.mediaType);
+  let list = trendingAll;
+  if (state.mediaType !== 'multi') list = list.filter(r => r.media_type === state.mediaType);
+  if (state.genre) list = list.filter(r => (r.genre_ids || []).includes(state.genre));
+  return list;
+}
+
+/* Genres actually present in the trending set, most common first. */
+function trendingGenres() {
+  let base = trendingAll;
+  if (state.mediaType !== 'multi') base = base.filter(r => r.media_type === state.mediaType);
+  const counts = new Map();
+  for (const r of base) {
+    for (const g of (r.genre_ids || [])) {
+      if (!GENRE_MAP[g]) continue;
+      counts.set(g, (counts.get(g) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || GENRE_MAP[a[0]].localeCompare(GENRE_MAP[b[0]]))
+    .map(([id]) => id);
 }
 
 /* ── Load detail ── */
@@ -226,18 +311,20 @@ async function loadDetail(mediaType, id) {
   state.detail = null;
   state.providers = null;
   state.providersLoading = true;
+  state.overviewOpen = false;
   render();
   try {
     // Load detail + credits first so we can show it immediately
     const detail = await tmdb(`/${mediaType}/${id}`, { append_to_response: 'credits' });
     detail.media_type = mediaType;
+    if (getRoute().screen !== 'detail' || getRoute().id !== String(id)) { state.detailLoading = false; return; }
     state.detail = detail;
     render();
     // Then load providers in the background
     const provData = await tmdb(`/${mediaType}/${id}/watch/providers`);
     state.providers = aggregateProviders(provData.results || {});
   } catch (e) {
-    if (!state.detail) toast('Failed to load details');
+    if (!state.detail) toast('Could not load this title. Try again in a moment.');
     console.error(e);
   }
   state.providersLoading = false;
@@ -266,6 +353,66 @@ function aggregateProviders(allCountries) {
   return result;
 }
 
+/* ── Load person ── */
+async function loadPerson(id) {
+  state.personLoading = true;
+  state.person = null;
+  state.personFilter = 'all';
+  state.personLimit = 40;
+  state.bioOpen = false;
+  render();
+  try {
+    const person = await tmdb(`/person/${id}`, { append_to_response: 'combined_credits' });
+    if (getRoute().screen !== 'person' || getRoute().id !== String(id)) { state.personLoading = false; return; }
+    person.works = buildFilmography(person.combined_credits || {});
+    state.person = person;
+  } catch (e) {
+    toast('Could not load this profile. Try again in a moment.');
+    console.error(e);
+  }
+  state.personLoading = false;
+  render();
+}
+
+/* One row per title, with every role that person had on it. */
+function buildFilmography(credits) {
+  const byKey = new Map();
+  const add = (c, role) => {
+    if (c.media_type !== 'movie' && c.media_type !== 'tv') return;
+    const key = `${c.media_type}-${c.id}`;
+    const date = c.release_date || c.first_air_date || '';
+    let row = byKey.get(key);
+    if (!row) {
+      row = {
+        id: c.id,
+        media_type: c.media_type,
+        title: c.title || c.name || 'Untitled',
+        date,
+        year: date.slice(0, 4),
+        poster_path: c.poster_path || null,
+        vote_average: c.vote_average || 0,
+        vote_count: c.vote_count || 0,
+        popularity: c.popularity || 0,
+        episode_count: c.episode_count || 0,
+        roles: [],
+      };
+      byKey.set(key, row);
+    }
+    if (role && !row.roles.includes(role)) row.roles.push(role);
+    if (!row.date && date) { row.date = date; row.year = date.slice(0, 4); }
+    if (c.episode_count > row.episode_count) row.episode_count = c.episode_count;
+  };
+
+  for (const c of (credits.cast || [])) add(c, c.character ? `as ${c.character}` : 'Cast');
+  for (const c of (credits.crew || [])) add(c, c.job || c.department || '');
+
+  return [...byKey.values()].sort((a, b) => {
+    if (!a.date && !b.date) return (b.popularity || 0) - (a.popularity || 0);
+    if (!a.date) return -1;   // unreleased / undated first
+    if (!b.date) return 1;
+    return b.date.localeCompare(a.date);
+  });
+}
 
 /* ── Render ── */
 function render() {
@@ -277,9 +424,21 @@ function render() {
       (!state.detail || String(state.detail.id) !== route.id || state.detail.media_type !== route.mediaType);
     if (needsLoad) {
       loadDetail(route.mediaType, route.id);
+      return;
     }
     app.innerHTML = renderDetail();
     bindDetail();
+    return;
+  }
+
+  if (route.screen === 'person') {
+    const needsLoad = !state.personLoading && (!state.person || String(state.person.id) !== route.id);
+    if (needsLoad) {
+      loadPerson(route.id);
+      return;
+    }
+    app.innerHTML = renderPerson();
+    bindPerson();
     return;
   }
 
@@ -290,7 +449,7 @@ function render() {
   }
 
   // Home / search screen
-  if (state.results.length === 0 && !state.loading && !state.query) {
+  if (state.results.length === 0 && !state.loading && !state.query && !state.trendingFailed && trendingAll.length === 0) {
     loadTrending();
     return;
   }
@@ -298,88 +457,176 @@ function render() {
   bindHome();
 }
 
+/* ── Shared pieces ── */
+function watchlistButton() {
+  const n = getWatchlist().length;
+  return `
+    <button class="iconbtn" id="goWatchlist" aria-label="Watchlist${n ? `, ${n} saved` : ''}">
+      ${ICON.bookmark}
+      ${n ? `<span class="count">${n}</span>` : ''}
+    </button>`;
+}
+
+function backButton(id) {
+  return `<button class="iconbtn iconbtn--flat" id="${id}" aria-label="Back">${ICON.back}</button>`;
+}
+
+function posterArt(path, alt, size = 'w342') {
+  if (!path) return `<div class="art-empty">${ICON.frame}</div>`;
+  return `<img src="${IMG_BASE}/${size}${path}" alt="" loading="lazy" decoding="async">`;
+}
+
+function kindLabel(mediaType) {
+  return mediaType === 'movie' ? 'Film' : 'Series';
+}
+
+function savedMark(id, mediaType) {
+  if (!isInWatchlist(id, mediaType)) return '';
+  const seen = isWatched(id, mediaType);
+  return `<span class="saved-mark${seen ? ' is-done' : ''}" aria-hidden="true">${seen ? ICON.tick : ICON.bookmarkFill}</span>`;
+}
+
+/* One tile in a grid or rail. */
+function renderCard(r, opts = {}) {
+  const title = r.title || r.name || 'Untitled';
+  const year = r.year || (r.release_date || r.first_air_date || '').slice(0, 4);
+  const rating = r.vote_average ? Number(r.vote_average).toFixed(1) : '';
+  const key = `${r.media_type}-${r.id}`;
+  const rank = opts.rank ? String(opts.rank).padStart(2, '0') : '';
+
+  return `
+    <div class="tile" data-key="${key}">
+      <button class="tile-open" data-type="${r.media_type}" data-id="${r.id}">
+        <div class="art">
+          ${posterArt(r.poster_path, title)}
+          ${rank ? `<span class="art-foot"></span><span class="rank">${rank}</span>` : ''}
+          ${savedMark(r.id, r.media_type)}
+        </div>
+        <h3 class="tile-title">${esc(title)}</h3>
+        <div class="factline">
+          <span>${kindLabel(r.media_type)}</span>
+          ${year ? `<span>${year}</span>` : ''}
+          ${rating && rating !== '0.0' ? `<span class="star">${rating}</span>` : ''}
+        </div>
+      </button>
+      ${r.match_name && r.match_person_id
+        ? `<button class="tile-via" data-person="${r.match_person_id}">${esc(r.match_name)}, ${esc(String(r.match_type).toLowerCase())}</button>`
+        : ''}
+    </div>`;
+}
+
 /* ── Home screen ── */
 function renderHome() {
   const isSearch = state.query.trim().length > 0;
-  const wlCount = getWatchlist().length;
+  const list = state.results;
+  const hero = !isSearch && !state.loading ? list[0] : null;
+  const rest = hero ? list.slice(1) : list;
+  const genres = !isSearch ? trendingGenres() : [];
+
   return `
-    <div class="header">
-      <div>
-        <h1>Scout</h1>
-        <div class="header-subtitle">Movies & TV</div>
-      </div>
-      <div class="header-right">
-        <button class="btn-icon watchlist-nav-btn" id="goWatchlist" aria-label="Watchlist">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-          </svg>
-          ${wlCount > 0 ? `<span class="wl-badge">${wlCount}</span>` : ''}
-        </button>
-      </div>
-    </div>
+    <div class="screen">
+      <header class="topbar">
+        <div class="topbar-lead">
+          <h1 class="wordmark">Scout<span class="wordmark-dot">.</span></h1>
+        </div>
+        <div class="topbar-actions">${watchlistButton()}</div>
+      </header>
 
-    <div class="search-section">
-      <div class="search-bar">
-        <input class="search-input" type="text" placeholder="Search movies & TV shows..."
-               value="${esc(state.query)}" id="searchInput" autocomplete="off">
+      <div class="searchrow">
+        <input class="search" type="search" id="searchInput" autocomplete="off"
+               placeholder="Search a title, an actor, a director"
+               aria-label="Search titles and people" value="${esc(state.query)}">
       </div>
-    </div>
 
-    <div class="toggle-bar">
-      <button class="toggle-btn ${state.mediaType==='multi'?'active':''}" data-type="multi">All</button>
-      <button class="toggle-btn ${state.mediaType==='movie'?'active':''}" data-type="movie">Movies</button>
-      <button class="toggle-btn ${state.mediaType==='tv'?'active':''}" data-type="tv">TV Shows</button>
-    </div>
+      ${hero ? renderMarquee(hero) : ''}
 
-    ${state.loading ? `
-      <div class="loading">
-        <div class="spinner"></div>
-        <span>Searching...</span>
+      <div class="filters">
+        <nav class="tabs" aria-label="Kind">
+          <button class="tab ${state.mediaType === 'multi' ? 'is-on' : ''}" data-type="multi" aria-pressed="${state.mediaType === 'multi'}">Everything</button>
+          <button class="tab ${state.mediaType === 'movie' ? 'is-on' : ''}" data-type="movie" aria-pressed="${state.mediaType === 'movie'}">Films</button>
+          <button class="tab ${state.mediaType === 'tv' ? 'is-on' : ''}" data-type="tv" aria-pressed="${state.mediaType === 'tv'}">Series</button>
+        </nav>
+        ${genres.length ? `
+          <div class="chiprail" role="group" aria-label="Genre">
+            <button class="chip ${state.genre === null ? 'is-on' : ''}" data-genre="all" aria-pressed="${state.genre === null}">Any genre</button>
+            ${genres.map(g => `<button class="chip ${state.genre === g ? 'is-on' : ''}" data-genre="${g}" aria-pressed="${state.genre === g}">${esc(GENRE_MAP[g])}</button>`).join('')}
+          </div>` : ''}
       </div>
-    ` : state.results.length === 0 ? `
-      <div class="empty-state">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-        <p>No results found.<br>Try a different search term.</p>
-      </div>
-    ` : `
-      ${!isSearch ? '<div class="trending-label">Trending this week</div>' : ''}
-      <div class="results-grid">
-        ${state.results.map(r => renderCard(r)).join('')}
-      </div>
-      ${isSearch && state.totalPages > 1 ? renderPagination() : ''}
-    `}
-  `;
+
+      ${state.loading ? `
+        <div class="pending"><span class="spinner"></span><span>${isSearch ? 'Searching' : 'Reading the charts'}</span></div>
+      ` : list.length === 0 && state.people.length === 0 ? renderNoResults() : `
+        ${isSearch && state.people.length ? `
+          <section class="block">
+            <h2 class="blockhead">People</h2>
+            <div class="peoplerail">
+              ${state.people.map(p => renderCreditPerson(p, p.known_for_department === 'Acting' ? 'Acting' : p.known_for_department)).join('')}
+            </div>
+          </section>` : ''}
+
+        ${rest.length ? `
+          <section class="block">
+            <div class="blockhead-row">
+              <h2 class="blockhead">${isSearch ? 'Titles' : hero ? 'Also charting' : 'Trending this week'}</h2>
+              ${isSearch ? `<span class="blockhead-note">${list.length} on this page</span>` : ''}
+            </div>
+            <div class="grid">
+              ${rest.map((r, i) => renderCard(r, { rank: isSearch ? 0 : i + 2 })).join('')}
+            </div>
+          </section>` : ''}
+        ${isSearch && state.totalPages > 1 ? renderPagination() : ''}
+      `}
+    </div>`;
 }
 
-function renderCard(r) {
+function renderMarquee(r) {
   const title = r.title || r.name || 'Untitled';
   const year = (r.release_date || r.first_air_date || '').slice(0, 4);
-  const poster = r.poster_path ? `${IMG_BASE}/w342${r.poster_path}` : '';
-  const rating = r.vote_average ? r.vote_average.toFixed(1) : '';
-  const type = r.media_type === 'movie' ? 'Movie' : 'TV';
+  const rating = r.vote_average ? Number(r.vote_average).toFixed(1) : '';
+  const art = r.backdrop_path ? `${IMG_BASE}/w780${r.backdrop_path}`
+    : r.poster_path ? `${IMG_BASE}/w500${r.poster_path}` : '';
+  const genre = (r.genre_ids || []).map(g => GENRE_MAP[g]).filter(Boolean)[0];
 
   return `
-    <div class="result-card" data-type="${r.media_type}" data-id="${r.id}">
-      <div class="poster-frame">
-        ${poster ? `<img src="${poster}" alt="${esc(title)}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=poster-fallback><svg width=40 height=40 viewBox=&quot;0 0 24 24&quot; fill=none stroke=currentColor stroke-width=1.5><rect x=2 y=2 width=20 height=20 rx=2/><path d=&quot;M7 2v20M17 2v20M2 12h20&quot;/></svg></div>'">` : `
-          <div class="poster-fallback">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 2v20M17 2v20M2 12h20"/>
-            </svg>
-          </div>
-        `}
-        <span class="badge-type">${type}</span>
-        ${rating ? `<span class="badge-rating">\u2605 ${rating}</span>` : ''}
-      </div>
-      <div class="result-title">${esc(title)}</div>
-      ${year ? `<div class="result-year">${year}</div>` : ''}
-      ${r.match_name ? `<div class="result-match">${esc(r.match_name)} · <span>${esc(r.match_type)}</span></div>`
-        : r.match_type === 'title' && state.query && title.toLowerCase().includes(state.query.toLowerCase())
-          ? `<div class="result-match"><span>Title match</span></div>` : ''}
-    </div>
-  `;
+    <section class="marquee">
+      <button class="marquee-open" data-type="${r.media_type}" data-id="${r.id}">
+        ${art ? `<img src="${art}" alt="" fetchpriority="high" decoding="async">` : ''}
+        <span class="marquee-scrim"></span>
+        <span class="marquee-text">
+          <span class="marquee-kicker"><span class="bignum">01</span> most watched this week</span>
+          <span class="marquee-title">${esc(title)}</span>
+          <span class="factline">
+            <span>${kindLabel(r.media_type)}</span>
+            ${year ? `<span>${year}</span>` : ''}
+            ${genre ? `<span>${esc(genre)}</span>` : ''}
+            ${rating && rating !== '0.0' ? `<span class="star">${rating}</span>` : ''}
+          </span>
+        </span>
+      </button>
+    </section>`;
+}
+
+function renderNoResults() {
+  if (state.query.trim()) {
+    return `
+      <div class="blank">
+        <h2>Nothing under that name</h2>
+        <p>Check the spelling, or search the director or an actor instead.</p>
+      </div>`;
+  }
+  if (state.genre) {
+    return `
+      <div class="blank">
+        <h2>Nothing in that genre this week</h2>
+        <p>The chart moves every Monday. Try another genre.</p>
+        <button class="moretoggle" data-genre="all">Show every genre</button>
+      </div>`;
+  }
+  return `
+    <div class="blank">
+      <h2>The chart is empty</h2>
+      <p>Scout could not reach TMDB. Reload once you are back online.</p>
+    </div>`;
 }
 
 function renderPagination() {
@@ -398,112 +645,297 @@ function renderPagination() {
     pages.push(total);
   }
   return `
-    <div class="pagination">
-      ${p > 1 ? `<button class="page-btn" data-page="${p-1}">&laquo;</button>` : ''}
+    <nav class="pager" aria-label="Result pages">
+      ${p > 1 ? `<button class="page" data-page="${p - 1}" aria-label="Previous page">&larr;</button>` : ''}
       ${pages.map(pg => pg === '...'
-        ? `<span class="page-info">...</span>`
-        : `<button class="page-btn ${pg===p?'active':''}" data-page="${pg}">${pg}</button>`
+        ? `<span class="page-gap" aria-hidden="true">...</span>`
+        : `<button class="page ${pg === p ? 'is-on' : ''}" data-page="${pg}" aria-label="Page ${pg}"${pg === p ? ' aria-current="page"' : ''}>${pg}</button>`
       ).join('')}
-      ${p < total ? `<button class="page-btn" data-page="${p+1}">&raquo;</button>` : ''}
-    </div>
-  `;
+      ${p < total ? `<button class="page" data-page="${p + 1}" aria-label="Next page">&rarr;</button>` : ''}
+    </nav>`;
 }
 
 /* ── Detail screen ── */
 function renderDetail() {
   if (!state.detail) {
     return `
-      <div class="detail-header">
-        <button class="back-btn" id="backBtn" aria-label="Back">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
-        </button>
-      </div>
-      <div class="loading"><div class="spinner"></div><span>Loading...</span></div>
-    `;
+      <div class="screen">
+        <header class="topbar">${backButton('backBtn')}</header>
+        <div class="pending"><span class="spinner"></span><span>Loading</span></div>
+      </div>`;
   }
 
   const d = state.detail;
   const title = d.title || d.name || 'Untitled';
   const year = (d.release_date || d.first_air_date || '').slice(0, 4);
-  const type = d.media_type === 'movie' ? 'Movie' : 'TV Show';
   const rating = d.vote_average ? d.vote_average.toFixed(1) : '';
-  const poster = d.poster_path ? `${IMG_BASE}/w500${d.poster_path}` : '';
   const backdrop = d.backdrop_path ? `${IMG_BASE}/w780${d.backdrop_path}` : '';
   const genres = (d.genres || []).map(g => g.name);
   const overview = d.overview || '';
   const runtime = d.runtime ? `${d.runtime} min` : '';
   const seasons = d.number_of_seasons ? `${d.number_of_seasons} season${d.number_of_seasons > 1 ? 's' : ''}` : '';
+  const long = overview.length > 420;
 
   return `
-    <div class="detail-screen${backdrop ? '' : ' detail-no-hero'}">
-      <div class="detail-header">
-        <button class="back-btn" id="backBtn" aria-label="Back">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
-        </button>
-        <div class="detail-header-actions">
-          <button class="btn-icon wl-toggle-btn${isInWatchlist(d.id, d.media_type) ? ' in-watchlist' : ''}" id="wlToggle" aria-label="Toggle watchlist">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="${isInWatchlist(d.id, d.media_type) ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-            </svg>
-          </button>
-          ${isInWatchlist(d.id, d.media_type) ? `
-          <button class="btn-icon watched-toggle-btn${isWatched(d.id, d.media_type) ? ' is-watched' : ''}" id="watchedToggle" aria-label="Mark as watched">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              ${isWatched(d.id, d.media_type) ? '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' : '<circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/>'}
-            </svg>
-          </button>
-          ` : ''}
-        </div>
-      </div>
+    <div class="screen${backdrop ? '' : ' detail-no-art'}">
+      <header class="topbar ${backdrop ? 'topbar--over' : ''}">
+        ${backButton('backBtn')}
+        <div class="topbar-actions">${watchlistButton()}</div>
+      </header>
 
       ${backdrop ? `
-        <div class="detail-hero">
-          <img src="${backdrop}" alt="">
-          <div class="detail-hero-gradient"></div>
-        </div>
-      ` : ''}
+        <div class="backdrop">
+          <img src="${backdrop}" alt="" fetchpriority="high" decoding="async">
+          <div class="backdrop-fade"></div>
+        </div>` : ''}
 
-      <div class="detail-body">
-        <div class="detail-poster-row">
-          ${poster ? `
-            <div class="detail-poster">
-              <img src="${poster}" alt="${esc(title)}">
-            </div>
-          ` : ''}
-          <div class="detail-info">
-            <h2 class="detail-title">${esc(title)}</h2>
-            <div class="detail-meta">
-              <span class="meta-tag">${type}</span>
-              ${year ? `<span class="meta-tag">${year}</span>` : ''}
-              ${runtime ? `<span class="meta-tag">${runtime}</span>` : ''}
-              ${seasons ? `<span class="meta-tag">${seasons}</span>` : ''}
-            </div>
-            ${rating ? `<div class="detail-rating">\u2605 ${rating} <span>/ 10</span></div>` : ''}
+      <div class="detail-head">
+        <div class="poster">${posterArt(d.poster_path, title, 'w500')}</div>
+        <div class="detail-facts">
+          <h1 class="screen-title">${esc(title)}</h1>
+          <div class="factline">
+            <span>${kindLabel(d.media_type)}</span>
+            ${year ? `<span>${year}</span>` : ''}
+            ${runtime ? `<span>${runtime}</span>` : ''}
+            ${seasons ? `<span>${seasons}</span>` : ''}
           </div>
-        </div>
-
-        ${genres.length ? `
-          <div class="genre-tags">
-            ${genres.map(g => `<span class="genre-tag">${esc(g)}</span>`).join('')}
-          </div>
-        ` : ''}
-
-        ${overview ? `
-          <div class="section">
-            <h3 class="section-title">Overview</h3>
-            <p class="overview-text">${esc(overview)}</p>
-          </div>
-        ` : ''}
-
-        ${renderCredits(d)}
-
-        <div class="section">
-          <h3 class="section-title">Where to Watch</h3>
-          ${renderProviders()}
+          ${rating && rating !== '0.0' ? `<p class="rating">${rating} <small>average of ${d.vote_count || 0} votes</small></p>` : ''}
         </div>
       </div>
-    </div>
-  `;
+
+      <div class="actions" id="detailActions">${renderDetailActions()}</div>
+
+      ${genres.length ? `<div class="taglist">${genres.map(g => `<span class="tag">${esc(g)}</span>`).join('')}</div>` : ''}
+
+      ${overview ? `
+        <section class="block">
+          <h2 class="blockhead">The story</h2>
+          <p class="prose${long && !state.overviewOpen ? ' is-clamped' : ''}" id="overviewText">${esc(overview)}</p>
+          ${long ? `<button class="moretoggle" id="overviewToggle">${state.overviewOpen ? 'Show less' : 'Read more'}</button>` : ''}
+        </section>` : ''}
+
+      ${renderCredits(d)}
+
+      <section class="block">
+        <h2 class="blockhead">Where to watch</h2>
+        ${renderProviders()}
+      </section>
+    </div>`;
+}
+
+function renderDetailActions() {
+  const d = state.detail;
+  if (!d) return '';
+  const saved = isInWatchlist(d.id, d.media_type);
+  const seen = isWatched(d.id, d.media_type);
+  return `
+    <button class="btn ${saved ? 'btn--quiet is-on' : 'btn--primary'}" id="wlToggle" aria-pressed="${saved}">
+      ${saved ? ICON.bookmarkFill : ICON.bookmark}
+      <span>${saved ? 'Saved' : 'Save to watchlist'}</span>
+    </button>
+    ${saved ? `
+      <button class="btn btn--quiet${seen ? ' is-done' : ''}" id="watchedToggle" aria-pressed="${seen}">
+        ${seen ? ICON.seenFill : ICON.seen}
+        <span>${seen ? 'Watched' : 'Mark watched'}</span>
+      </button>` : ''}`;
+}
+
+function renderCredits(d) {
+  const credits = d.credits;
+  if (!credits) return '';
+  const directors = (credits.crew || []).filter(c => c.job === 'Director');
+  const creators = (d.created_by || []);
+  const cast = (credits.cast || []).slice(0, 12);
+  if (!directors.length && !cast.length && !creators.length) return '';
+
+  const lead = directors.length ? directors : creators;
+  const leadLabel = directors.length
+    ? `Direction`
+    : `Created by`;
+
+  return `
+    <section class="block">
+      <h2 class="blockhead">Who made it</h2>
+      ${lead.length ? `
+        <div class="blockhead-row"><span class="blockhead-note">${leadLabel}</span></div>
+        <div class="peoplerail">${lead.map(p => renderCreditPerson(p, null)).join('')}</div>` : ''}
+      ${cast.length ? `
+        <div class="blockhead-row" style="margin-top:18px"><span class="blockhead-note">Cast</span></div>
+        <div class="peoplerail">${cast.map(p => renderCreditPerson(p, p.character)).join('')}</div>` : ''}
+    </section>`;
+}
+
+function renderCreditPerson(p, role) {
+  const photo = p.profile_path ? `${IMG_BASE}/w185${p.profile_path}` : '';
+  return `
+    <button class="person-chip" data-person="${p.id}">
+      <span class="face">
+        ${photo ? `<img src="${photo}" alt="" loading="lazy" decoding="async">` : ICON.head}
+      </span>
+      <span class="person-name">${esc(p.name)}</span>
+      ${role ? `<span class="person-role">${esc(role)}</span>` : ''}
+    </button>`;
+}
+
+function renderProviders() {
+  if (state.providersLoading) {
+    return '<div class="pending"><span class="spinner"></span><span>Checking services</span></div>';
+  }
+  const providers = state.providers;
+  if (!providers || providers.length === 0) {
+    return '<p class="prose">No subscription service carries this one right now.</p>';
+  }
+  return `
+    <div class="providers">
+      ${providers.map((p, i) => `
+        <button class="provider" data-idx="${i}" aria-expanded="false">
+          ${p.logo_url ? `<img class="provider-logo" src="${p.logo_url}" alt="" loading="lazy">` : ''}
+          <span class="provider-name">${esc(p.name)}</span>
+          <span class="provider-count">${p.countries.length} ${p.countries.length === 1 ? 'country' : 'countries'}</span>
+          <span class="provider-flags">
+            ${p.countries.map(cc => `<span class="flag" title="${esc(countryName(cc))}">${countryFlag(cc)}</span>`).join('')}
+          </span>
+        </button>`).join('')}
+    </div>`;
+}
+
+/* ── Person screen ── */
+function renderPerson() {
+  if (!state.person) {
+    return `
+      <div class="screen">
+        <header class="topbar">${backButton('personBackBtn')}</header>
+        <div class="pending"><span class="spinner"></span><span>Loading</span></div>
+      </div>`;
+  }
+
+  const p = state.person;
+  const photo = p.profile_path ? `${IMG_BASE}/w342${p.profile_path}` : '';
+  const works = p.works || [];
+  const filtered = state.personFilter === 'all' ? works : works.filter(w => w.media_type === state.personFilter);
+  const shown = filtered.slice(0, state.personLimit);
+  const filmCount = works.filter(w => w.media_type === 'movie').length;
+  const tvCount = works.filter(w => w.media_type === 'tv').length;
+
+  const knownFor = [...works]
+    .filter(w => w.poster_path)
+    .sort((a, b) => (b.vote_count || 0) * (b.popularity || 1) - (a.vote_count || 0) * (a.popularity || 1))
+    .slice(0, 10);
+
+  const bio = (p.biography || '').trim();
+  const longBio = bio.length > 460;
+  const born = longDate(p.birthday);
+  const died = longDate(p.deathday);
+
+  const facts = [];
+  if (born) facts.push({ k: 'Born', v: born + (died ? '' : ageSuffix(p.birthday)) });
+  if (died) facts.push({ k: 'Died', v: died + ageAtDeath(p.birthday, p.deathday) });
+  if (p.place_of_birth) facts.push({ k: 'From', v: p.place_of_birth });
+
+  return `
+    <div class="screen">
+      <header class="topbar">
+        ${backButton('personBackBtn')}
+        <div class="topbar-actions">${watchlistButton()}</div>
+      </header>
+
+      <div class="person-head">
+        <div class="portrait">
+          ${photo ? `<img src="${photo}" alt="${esc(p.name)}" fetchpriority="high" decoding="async">` : ICON.head}
+        </div>
+        <div>
+          <h1 class="screen-title">${esc(p.name)}</h1>
+          <div class="factline">
+            ${p.known_for_department ? `<span>${esc(p.known_for_department)}</span>` : ''}
+            ${works.length ? `<span>${works.length} credits</span>` : ''}
+          </div>
+        </div>
+      </div>
+
+      ${facts.length ? `
+        <div class="person-stats">
+          ${facts.map(f => `<div class="stat"><div class="stat-key">${esc(f.k)}</div><div class="stat-val">${esc(f.v)}</div></div>`).join('')}
+        </div>` : ''}
+
+      ${bio ? `
+        <section class="block">
+          <h2 class="blockhead">Life</h2>
+          <p class="prose${longBio && !state.bioOpen ? ' is-clamped' : ''}">${esc(bio)}</p>
+          ${longBio ? `<button class="moretoggle" id="bioToggle">${state.bioOpen ? 'Show less' : 'Read more'}</button>` : ''}
+        </section>` : ''}
+
+      ${knownFor.length ? `
+        <section class="block">
+          <h2 class="blockhead">Best known for</h2>
+          <div class="rail">${knownFor.map(w => renderCard(w)).join('')}</div>
+        </section>` : ''}
+
+      ${works.length ? `
+        <section class="block">
+          <h2 class="blockhead">Every credit</h2>
+          <nav class="tabs" aria-label="Credit kind">
+            <button class="tab ${state.personFilter === 'all' ? 'is-on' : ''}" data-pfilter="all" aria-pressed="${state.personFilter === 'all'}">All<span class="tab-count">${works.length}</span></button>
+            <button class="tab ${state.personFilter === 'movie' ? 'is-on' : ''}" data-pfilter="movie" aria-pressed="${state.personFilter === 'movie'}">Films<span class="tab-count">${filmCount}</span></button>
+            <button class="tab ${state.personFilter === 'tv' ? 'is-on' : ''}" data-pfilter="tv" aria-pressed="${state.personFilter === 'tv'}">Series<span class="tab-count">${tvCount}</span></button>
+          </nav>
+          <ol class="filmo">
+            ${shown.map((w, i) => renderFilmoRow(w, i === 0 ? null : shown[i - 1])).join('')}
+          </ol>
+          ${filtered.length > shown.length
+            ? `<button class="morelist" id="moreCredits">Show ${filtered.length - shown.length} more</button>`
+            : ''}
+        </section>` : `
+        <div class="blank">
+          <h2>No credits on file</h2>
+          <p>TMDB has a profile for ${esc(p.name)} but no titles attached to it yet.</p>
+        </div>`}
+    </div>`;
+}
+
+function renderFilmoRow(w, prev) {
+  const showYear = !prev || prev.year !== w.year;
+  const saved = isInWatchlist(w.id, w.media_type);
+  const seen = isWatched(w.id, w.media_type);
+  const rating = w.vote_average ? Number(w.vote_average).toFixed(1) : '';
+  const bits = [];
+  if (w.roles.length) bits.push(esc(w.roles.slice(0, 2).join(', ')));
+  if (w.media_type === 'tv' && w.episode_count) bits.push(`${w.episode_count} episodes`);
+  if (rating && rating !== '0.0') bits.push(`<span class="star">${rating}</span>`);
+
+  return `
+    <li class="filmo-row">
+      <span class="filmo-year">${showYear ? (w.year || 'TBA') : ''}</span>
+      <button class="filmo-open" data-type="${w.media_type}" data-id="${w.id}">
+        <span class="filmo-title">${esc(w.title)}</span>
+        ${bits.length ? `<span class="filmo-sub factline">${bits.map(b => `<span>${b}</span>`).join('')}</span>` : ''}
+      </button>
+      <button class="filmo-save${saved ? ' is-on' : ''}" data-save-id="${w.id}" data-save-type="${w.media_type}"
+              aria-pressed="${saved}" aria-label="${saved ? `Remove ${esc(w.title)} from watchlist` : `Save ${esc(w.title)} to watchlist`}">
+        ${saved ? (seen ? ICON.seenFill : ICON.bookmarkFill) : ICON.bookmark}
+      </button>
+    </li>`;
+}
+
+function ageSuffix(birthday) {
+  if (!birthday) return '';
+  const b = new Date(`${birthday}T00:00:00Z`);
+  if (isNaN(b)) return '';
+  const now = new Date();
+  let age = now.getUTCFullYear() - b.getUTCFullYear();
+  const m = now.getUTCMonth() - b.getUTCMonth();
+  if (m < 0 || (m === 0 && now.getUTCDate() < b.getUTCDate())) age--;
+  return age > 0 && age < 120 ? ` (${age})` : '';
+}
+
+function ageAtDeath(birthday, deathday) {
+  if (!birthday || !deathday) return '';
+  const b = new Date(`${birthday}T00:00:00Z`);
+  const d = new Date(`${deathday}T00:00:00Z`);
+  if (isNaN(b) || isNaN(d)) return '';
+  let age = d.getUTCFullYear() - b.getUTCFullYear();
+  const m = d.getUTCMonth() - b.getUTCMonth();
+  if (m < 0 || (m === 0 && d.getUTCDate() < b.getUTCDate())) age--;
+  return age > 0 && age < 120 ? ` (aged ${age})` : '';
 }
 
 /* ── Watchlist screen ── */
@@ -522,294 +954,322 @@ function renderWatchlist() {
   const watchedCount = all.filter(w => !!w.watched).length;
 
   return `
-    <div class="header">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <button class="back-btn" id="wlBackBtn" aria-label="Back">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
-        </button>
-        <div>
-          <h1>Watchlist</h1>
-          <div class="header-subtitle">${all.length} title${all.length !== 1 ? 's' : ''}${watchedCount > 0 ? ` \u00b7 ${watchedCount} watched` : ''}</div>
+    <div class="screen">
+      <header class="topbar">
+        <div class="topbar-lead">
+          ${backButton('wlBackBtn')}
+          <h1 class="wordmark">Watchlist</h1>
+        </div>
+      </header>
+
+      <div class="filters">
+        <nav class="tabs" aria-label="Kind">
+          <button class="tab ${typeFilter === 'all' ? 'is-on' : ''}" data-wltype="all" aria-pressed="${typeFilter === 'all'}">All<span class="tab-count">${all.length}</span></button>
+          <button class="tab ${typeFilter === 'movie' ? 'is-on' : ''}" data-wltype="movie" aria-pressed="${typeFilter === 'movie'}">Films<span class="tab-count">${movieCount}</span></button>
+          <button class="tab ${typeFilter === 'tv' ? 'is-on' : ''}" data-wltype="tv" aria-pressed="${typeFilter === 'tv'}">Series<span class="tab-count">${tvCount}</span></button>
+        </nav>
+        <div class="chiprail" role="group" aria-label="Status">
+          <button class="chip ${statusFilter === 'all' ? 'is-on' : ''}" data-wlstatus="all" aria-pressed="${statusFilter === 'all'}">Everything</button>
+          <button class="chip ${statusFilter === 'to-watch' ? 'is-on' : ''}" data-wlstatus="to-watch" aria-pressed="${statusFilter === 'to-watch'}">Still to watch${all.length - watchedCount ? ` (${all.length - watchedCount})` : ''}</button>
+          <button class="chip ${statusFilter === 'watched' ? 'is-on' : ''}" data-wlstatus="watched" aria-pressed="${statusFilter === 'watched'}">Watched${watchedCount ? ` (${watchedCount})` : ''}</button>
         </div>
       </div>
-    </div>
 
-    <div class="toggle-bar">
-      <button class="toggle-btn ${typeFilter==='all'?'active':''}" data-wltype="all">All</button>
-      <button class="toggle-btn ${typeFilter==='movie'?'active':''}" data-wltype="movie">Movies${movieCount ? ` (${movieCount})` : ''}</button>
-      <button class="toggle-btn ${typeFilter==='tv'?'active':''}" data-wltype="tv">TV${tvCount ? ` (${tvCount})` : ''}</button>
-    </div>
-
-    <div class="toggle-bar wl-status-bar">
-      <button class="toggle-btn ${statusFilter==='all'?'active':''}" data-wlstatus="all">All</button>
-      <button class="toggle-btn ${statusFilter==='to-watch'?'active':''}" data-wlstatus="to-watch">To Watch</button>
-      <button class="toggle-btn ${statusFilter==='watched'?'active':''}" data-wlstatus="watched">Watched</button>
-    </div>
-
-    ${items.length === 0 ? `
-      <div class="empty-state">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-        </svg>
-        ${all.length === 0
-          ? '<p>Your watchlist is empty.<br>Save movies and TV shows to watch later.</p>'
-          : '<p>No matches for this filter.</p>'
-        }
-      </div>
-    ` : `
-      <div class="results-grid">
-        ${items.map(w => renderWatchlistCard(w)).join('')}
-      </div>
-    `}
-  `;
+      ${items.length === 0 ? `
+        <div class="blank">
+          ${all.length === 0 ? `
+            <h2>Nothing saved yet</h2>
+            <p>Tap the bookmark on any title and it waits for you here.</p>
+            <button class="moretoggle" id="wlGoHome">Browse the chart</button>
+          ` : `
+            <h2>Nothing under this filter</h2>
+            <p>${watchedCount === all.length ? 'You have watched everything you saved.' : 'Try another filter to see the rest.'}</p>
+          `}
+        </div>
+      ` : `
+        <div class="grid">
+          ${items.map(w => renderWatchlistCard(w)).join('')}
+        </div>
+      `}
+    </div>`;
 }
 
 function renderWatchlistCard(w) {
-  const poster = w.poster_path ? `${IMG_BASE}/w342${w.poster_path}` : '';
-  const type = w.media_type === 'movie' ? 'Movie' : 'TV';
-
   return `
-    <div class="result-card wl-card" data-type="${w.media_type}" data-id="${w.id}">
-      <div class="poster-frame">
-        ${poster ? `<img src="${poster}" alt="${esc(w.title)}" loading="lazy">` : `
-          <div class="poster-fallback">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 2v20M17 2v20M2 12h20"/>
-            </svg>
-          </div>
-        `}
-        <span class="badge-type">${type}</span>
-        ${w.rating ? `<span class="badge-rating">\u2605 ${w.rating}</span>` : ''}
-        ${w.watched ? '<span class="badge-watched">\u2713</span>' : ''}
-        <button class="wl-remove-btn" data-remove-id="${w.id}" data-remove-type="${w.media_type}" aria-label="Remove from watchlist">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
-      </div>
-      <div class="result-title">${esc(w.title)}</div>
-      ${w.year ? `<div class="result-year">${w.year}</div>` : ''}
-    </div>
-  `;
-}
-
-function bindWatchlist() {
-  // Back button
-  const back = document.getElementById('wlBackBtn');
-  if (back) back.addEventListener('click', () => { location.hash = '#/'; });
-
-  // Type filter
-  document.querySelectorAll('[data-wltype]').forEach(b => {
-    b.addEventListener('click', () => {
-      state.watchlistFilter = b.dataset.wltype;
-      render();
-    });
-  });
-
-  // Status filter
-  document.querySelectorAll('[data-wlstatus]').forEach(b => {
-    b.addEventListener('click', () => {
-      state.watchlistStatusFilter = b.dataset.wlstatus;
-      render();
-    });
-  });
-
-  // Card navigation (but not the remove button)
-  document.querySelectorAll('.wl-card').forEach(card => {
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.wl-remove-btn')) return;
-      location.hash = `#/${card.dataset.type}/${card.dataset.id}`;
-    });
-  });
-
-  // Remove buttons
-  document.querySelectorAll('.wl-remove-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const id = Number(btn.dataset.removeId);
-      const type = btn.dataset.removeType;
-      // Animate card out
-      const card = btn.closest('.wl-card');
-      if (card) {
-        card.style.transition = 'opacity 0.25s ease, transform 0.25s ease';
-        card.style.opacity = '0';
-        card.style.transform = 'scale(0.9)';
-      }
-      setTimeout(() => {
-        removeFromWatchlist(id, type);
-        toast('Removed from watchlist');
-        render();
-      }, 250);
-    });
-  });
-}
-
-function renderCredits(d) {
-  const credits = d.credits;
-  if (!credits) return '';
-  const directors = (credits.crew || []).filter(c => c.job === 'Director');
-  const cast = (credits.cast || []).slice(0, 8);
-  if (!directors.length && !cast.length) return '';
-
-  return `
-    <div class="section">
-      <h3 class="section-title">Cast & Crew</h3>
-      ${directors.length ? `
-        <div class="credits-group">
-          <div class="credits-label">Director${directors.length > 1 ? 's' : ''}</div>
-          <div class="credits-row">
-            ${directors.map(p => renderCreditPerson(p, null)).join('')}
-          </div>
+    <div class="tile${w.watched ? ' is-watched' : ''}" data-key="${w.media_type}-${w.id}">
+      <button class="tile-open" data-type="${w.media_type}" data-id="${w.id}">
+        <div class="art">
+          ${posterArt(w.poster_path, w.title)}
+          ${w.watched ? `<span class="saved-mark is-done" aria-hidden="true">${ICON.tick}</span>` : ''}
         </div>
-      ` : ''}
-      ${cast.length ? `
-        <div class="credits-group">
-          <div class="credits-label">Cast</div>
-          <div class="credits-row">
-            ${cast.map(p => renderCreditPerson(p, p.character)).join('')}
-          </div>
+        <h3 class="tile-title">${esc(w.title)}</h3>
+        <div class="factline">
+          <span>${kindLabel(w.media_type)}</span>
+          ${w.year ? `<span>${w.year}</span>` : ''}
+          ${w.rating ? `<span class="star">${w.rating}</span>` : ''}
+          ${w.watched ? `<span class="now">Watched</span>` : ''}
         </div>
-      ` : ''}
-    </div>
-  `;
+      </button>
+      <button class="tile-remove" data-remove-id="${w.id}" data-remove-type="${w.media_type}"
+              aria-label="Remove ${esc(w.title)} from watchlist">${ICON.close}</button>
+    </div>`;
 }
 
-function renderCreditPerson(p, role) {
-  const photo = p.profile_path ? `${IMG_BASE}/w185${p.profile_path}` : '';
-  return `
-    <div class="credit-person">
-      <div class="credit-photo">
-        ${photo ? `<img src="${photo}" alt="${esc(p.name)}" loading="lazy">` : `
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 12 0v1"/>
-          </svg>
-        `}
-      </div>
-      <div class="credit-name">${esc(p.name)}</div>
-      ${role ? `<div class="credit-role">${esc(role)}</div>` : ''}
-    </div>
-  `;
+/* ── Binding ── */
+function bindCommon() {
+  const wlBtn = document.getElementById('goWatchlist');
+  if (wlBtn) wlBtn.addEventListener('click', () => go('#/watchlist'));
+
+  document.querySelectorAll('.tile-open, .marquee-open, .filmo-open').forEach(el => {
+    el.addEventListener('click', () => go(`#/${el.dataset.type}/${el.dataset.id}`));
+  });
+
+  document.querySelectorAll('[data-person]').forEach(el => {
+    el.addEventListener('click', () => go(`#/person/${el.dataset.person}`));
+  });
 }
 
-function renderProviders() {
-  if (state.providersLoading) {
-    return '<div class="loading"><div class="spinner"></div><span>Loading availability...</span></div>';
-  }
-  const providers = state.providers;
-  if (!providers || providers.length === 0) {
-    return '<p class="no-providers">No streaming availability found.</p>';
-  }
-  return `
-    <div class="providers-list">
-      ${providers.map((p, i) => `
-        <div class="provider-chip" data-idx="${i}">
-          ${p.logo_url ? `<img class="provider-logo" src="${p.logo_url}" alt="${esc(p.name)}" loading="lazy">` : ''}
-          <span class="provider-name">${esc(p.name)}</span>
-          <span class="provider-count">${p.countries.length} ${p.countries.length === 1 ? 'country' : 'countries'}</span>
-          <div class="provider-countries">
-            ${p.countries.map(cc => `<span class="country-flag" title="${esc(countryName(cc))}">${countryFlag(cc)}</span>`).join('')}
-          </div>
-        </div>
-      `).join('')}
-    </div>
-  `;
+function goBack() {
+  if (history.length > 1) history.back();
+  else go('#/');
 }
 
 /* ── Debounce ── */
 let debounceTimer = null;
 
-/* ── Bind events ── */
 function bindHome() {
-  // Watchlist nav button
-  const wlBtn = document.getElementById('goWatchlist');
-  if (wlBtn) wlBtn.addEventListener('click', () => { location.hash = '#/watchlist'; });
+  bindCommon();
 
   const input = document.getElementById('searchInput');
-
   if (input) {
+    input.addEventListener('focus', () => { state.searchFocused = true; });
+    input.addEventListener('blur', () => { state.searchFocused = false; });
     input.addEventListener('input', () => {
       clearTimeout(debounceTimer);
       const q = input.value.trim();
       if (!q) {
         state.query = '';
+        state.people = [];
         state.results = filterTrending();
         render();
         return;
       }
-      debounceTimer = setTimeout(() => { state.query = input.value; doSearch(); }, 1000);
+      debounceTimer = setTimeout(() => { state.query = input.value; doSearch(); }, 700);
     });
     input.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { clearTimeout(debounceTimer); state.query = input.value; doSearch(); }
+      if (e.key === 'Enter') { clearTimeout(debounceTimer); state.query = input.value; doSearch(); input.blur(); }
     });
-    if (!state.loading && state.results.length === 0 && state.query) {
+    if (state.searchFocused) {
       input.focus();
+      const v = input.value;
+      input.setSelectionRange(v.length, v.length);
     }
   }
 
-  // toggle buttons
-  document.querySelectorAll('.toggle-btn').forEach(b => {
+  document.querySelectorAll('.tab[data-type]').forEach(b => {
     b.addEventListener('click', () => {
       state.mediaType = b.dataset.type;
+      state.genre = null;
       if (state.query.trim()) doSearch();
       else { state.results = filterTrending(); render(); }
     });
   });
 
-  // result cards
-  document.querySelectorAll('.result-card').forEach(card => {
-    card.addEventListener('click', () => {
-      const type = card.dataset.type;
-      const id = card.dataset.id;
-      location.hash = `#/${type}/${id}`;
+  document.querySelectorAll('[data-genre]').forEach(b => {
+    b.addEventListener('click', () => {
+      const g = b.dataset.genre;
+      state.genre = g === 'all' ? null : Number(g);
+      state.results = filterTrending();
+      render();
     });
   });
 
-  // pagination
-  document.querySelectorAll('.page-btn[data-page]').forEach(b => {
-    b.addEventListener('click', () => doSearch(Number(b.dataset.page)));
+  document.querySelectorAll('.page[data-page]').forEach(b => {
+    b.addEventListener('click', () => {
+      doSearch(Number(b.dataset.page));
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
   });
 }
 
 function bindDetail() {
   const back = document.getElementById('backBtn');
-  if (back) {
-    back.addEventListener('click', () => {
-      history.back();
+  if (back) back.addEventListener('click', goBack);
+
+  bindCommon();
+  bindDetailActions();
+
+  const toggle = document.getElementById('overviewToggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      state.overviewOpen = !state.overviewOpen;
+      const text = document.getElementById('overviewText');
+      if (text) text.classList.toggle('is-clamped', !state.overviewOpen);
+      toggle.textContent = state.overviewOpen ? 'Show less' : 'Read more';
     });
   }
 
-  // Watchlist toggle
+  document.querySelectorAll('.provider').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const open = chip.getAttribute('aria-expanded') === 'true';
+      chip.setAttribute('aria-expanded', String(!open));
+    });
+  });
+}
+
+function bindDetailActions() {
+  const d = state.detail;
+  if (!d) return;
+
+  const refresh = () => {
+    const holder = document.getElementById('detailActions');
+    if (holder) {
+      holder.innerHTML = renderDetailActions();
+      bindDetailActions();
+    }
+    syncSaved(d.id, d.media_type);
+  };
+
   const wlToggle = document.getElementById('wlToggle');
-  if (wlToggle && state.detail) {
+  if (wlToggle) {
     wlToggle.addEventListener('click', () => {
-      const d = state.detail;
       if (isInWatchlist(d.id, d.media_type)) {
         removeFromWatchlist(d.id, d.media_type);
-        toast('Removed from watchlist');
+        toast('Removed from your watchlist');
       } else {
         addToWatchlist(d);
-        toast('Added to watchlist');
+        toast('Saved to your watchlist');
       }
-      render();
+      refresh();
     });
   }
 
-  // Watched toggle
   const watchedToggle = document.getElementById('watchedToggle');
-  if (watchedToggle && state.detail) {
+  if (watchedToggle) {
     watchedToggle.addEventListener('click', () => {
-      const d = state.detail;
       toggleWatched(d.id, d.media_type);
-      toast(isWatched(d.id, d.media_type) ? 'Marked as watched' : 'Marked as unwatched');
+      toast(isWatched(d.id, d.media_type) ? 'Marked as watched' : 'Marked as not watched');
+      refresh();
+    });
+  }
+}
+
+function bindPerson() {
+  const back = document.getElementById('personBackBtn');
+  if (back) back.addEventListener('click', goBack);
+
+  bindCommon();
+
+  const bio = document.getElementById('bioToggle');
+  if (bio) {
+    bio.addEventListener('click', () => {
+      state.bioOpen = !state.bioOpen;
+      const text = bio.previousElementSibling;
+      if (text) text.classList.toggle('is-clamped', !state.bioOpen);
+      bio.textContent = state.bioOpen ? 'Show less' : 'Read more';
+    });
+  }
+
+  document.querySelectorAll('[data-pfilter]').forEach(b => {
+    b.addEventListener('click', () => {
+      state.personFilter = b.dataset.pfilter;
+      state.personLimit = 40;
+      render();
+    });
+  });
+
+  const more = document.getElementById('moreCredits');
+  if (more) {
+    more.addEventListener('click', () => {
+      state.personLimit += 120;
       render();
     });
   }
 
-  // provider expand/collapse
-  document.querySelectorAll('.provider-chip').forEach(chip => {
-    chip.addEventListener('click', (e) => {
-      if (e.target.closest('.country-flag')) return;
-      chip.classList.toggle('expanded');
+  document.querySelectorAll('.filmo-save').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.saveId);
+      const type = btn.dataset.saveType;
+      const work = (state.person.works || []).find(w => w.id === id && w.media_type === type);
+      if (isInWatchlist(id, type)) {
+        removeFromWatchlist(id, type);
+        toast('Removed from your watchlist');
+      } else if (work) {
+        addToWatchlist({ ...work, release_date: work.date, first_air_date: work.date });
+        toast('Saved to your watchlist');
+      }
+      syncSaved(id, type);
+    });
+  });
+}
+
+/* Keep every visible marker for one title in step, without a full redraw. */
+function syncSaved(id, mediaType) {
+  const saved = isInWatchlist(id, mediaType);
+  const seen = isWatched(id, mediaType);
+
+  document.querySelectorAll(`.filmo-save[data-save-id="${id}"][data-save-type="${mediaType}"]`).forEach(btn => {
+    btn.classList.toggle('is-on', saved);
+    btn.setAttribute('aria-pressed', String(saved));
+    btn.innerHTML = saved ? (seen ? ICON.seenFill : ICON.bookmarkFill) : ICON.bookmark;
+  });
+
+  document.querySelectorAll(`.tile[data-key="${mediaType}-${id}"]`).forEach(tile => {
+    const art = tile.querySelector('.art');
+    if (!art) return;
+    const mark = art.querySelector('.saved-mark');
+    if (!saved) { if (mark) mark.remove(); return; }
+    const html = seen ? ICON.tick : ICON.bookmarkFill;
+    if (mark) {
+      mark.classList.toggle('is-done', seen);
+      mark.innerHTML = html;
+    } else {
+      art.insertAdjacentHTML('beforeend', `<span class="saved-mark${seen ? ' is-done' : ''}" aria-hidden="true">${html}</span>`);
+    }
+  });
+
+  const badge = document.querySelector('#goWatchlist .count');
+  const n = getWatchlist().length;
+  if (badge && n) badge.textContent = n;
+  else if (badge) badge.remove();
+  else if (n) {
+    const btn = document.getElementById('goWatchlist');
+    if (btn) btn.insertAdjacentHTML('beforeend', `<span class="count">${n}</span>`);
+  }
+}
+
+function bindWatchlist() {
+  const back = document.getElementById('wlBackBtn');
+  if (back) back.addEventListener('click', () => go('#/'));
+
+  bindCommon();
+
+  const home = document.getElementById('wlGoHome');
+  if (home) home.addEventListener('click', () => go('#/'));
+
+  document.querySelectorAll('[data-wltype]').forEach(b => {
+    b.addEventListener('click', () => { state.watchlistFilter = b.dataset.wltype; render(); });
+  });
+
+  document.querySelectorAll('[data-wlstatus]').forEach(b => {
+    b.addEventListener('click', () => { state.watchlistStatusFilter = b.dataset.wlstatus; render(); });
+  });
+
+  document.querySelectorAll('.tile-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.removeId);
+      const type = btn.dataset.removeType;
+      const tile = btn.closest('.tile');
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const finish = () => { removeFromWatchlist(id, type); toast('Removed from your watchlist'); render(); };
+      if (tile && !reduce) {
+        tile.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
+        tile.style.opacity = '0';
+        tile.style.transform = 'scale(0.94)';
+        setTimeout(finish, 200);
+      } else {
+        finish();
+      }
     });
   });
 }
@@ -839,9 +1299,9 @@ if ('serviceWorker' in navigator) {
 }
 
 function showUpdateBanner(reg) {
-  const banner = document.createElement('div');
+  const banner = document.createElement('button');
   banner.className = 'update-banner';
-  banner.textContent = 'Update available — tap to refresh';
+  banner.textContent = 'New version ready. Tap to reload.';
   banner.addEventListener('click', () => {
     if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
     location.reload();

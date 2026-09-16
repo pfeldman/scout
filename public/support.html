@@ -2,57 +2,154 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#E4EAE6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#07161A" media="(prefers-color-scheme: dark)">
   <title>Scout - Support</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1814; color: #e8e0d8; min-height: 100vh; padding: 40px 20px; }
-    .container { max-width: 600px; margin: 0 auto; }
-    h1 { font-size: 28px; margin-bottom: 8px; color: #fff; }
-    .subtitle { color: #a8a099; margin-bottom: 32px; }
-    .section { margin-bottom: 28px; }
-    h2 { font-size: 18px; margin-bottom: 12px; color: #e07a5f; }
-    p, li { font-size: 15px; line-height: 1.6; color: #c4bbb3; }
-    ul { padding-left: 20px; }
-    li { margin-bottom: 8px; }
-    a { color: #e07a5f; }
-    .contact { background: #242018; border-radius: 12px; padding: 20px; margin-top: 32px; }
-    .contact p { margin-bottom: 8px; }
+    :root {
+      --bg: #E4EAE6;
+      --surface: #F4F7F5;
+      --text: #0B1A1C;
+      --text-2: #3A5654;
+      --text-3: #5C7370;
+      --line: rgba(11, 26, 28, 0.13);
+      --signal: #B3204C;
+      --focus: #1B49C7;
+      color-scheme: light;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #07161A;
+        --surface: #0F2329;
+        --text: #E8F1F0;
+        --text-2: #9CB5B4;
+        --text-3: #7E9A99;
+        --line: rgba(176, 221, 219, 0.15);
+        --signal: #FF7E9E;
+        --focus: #9DBBFF;
+        color-scheme: dark;
+      }
+    }
+
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Archivo', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      padding: 44px 20px 64px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wrap { max-width: 34rem; margin: 0 auto; }
+
+    h1 {
+      font-family: 'Syne', 'Helvetica Neue', Arial, sans-serif;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      font-size: clamp(30px, 8vw, 40px);
+      line-height: 1.02;
+    }
+
+    h1 .dot { color: var(--signal); }
+
+    .lede { color: var(--text-2); margin-top: 10px; max-width: 30rem; }
+
+    h2 {
+      font-family: 'Syne', 'Helvetica Neue', Arial, sans-serif;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      font-size: 19px;
+      margin-bottom: 8px;
+    }
+
+    section { margin-top: 34px; padding-top: 24px; border-top: 1px solid var(--line); }
+
+    p, li { color: var(--text-2); }
+
+    p + p { margin-top: 12px; }
+
+    ul { list-style: none; }
+
+    li { padding: 9px 0; border-bottom: 1px solid var(--line); }
+    li:last-child { border-bottom: 0; }
+
+    .q { color: var(--text); font-weight: 600; display: block; }
+
+    a { color: var(--signal); text-underline-offset: 3px; }
+
+    a:focus-visible, :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 3px; }
+
+    .contact {
+      margin-top: 34px;
+      padding: 20px;
+      border-radius: 12px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+    }
+
+    .contact h2 { margin-bottom: 6px; }
+
+    .foot { margin-top: 34px; font-size: 13px; color: var(--text-3); }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Scout - Movies & TV</h1>
-    <p class="subtitle">Support & Help</p>
+  <div class="wrap">
+    <h1>Scout<span class="dot">.</span></h1>
+    <p class="lede">A weekly chart of what is worth watching, who made it, and where it streams. This page is for when something is not working.</p>
 
-    <div class="section">
-      <h2>About Scout</h2>
-      <p>Scout helps you discover movies and TV shows. Search by title, actor, or director, and see where to stream content in every country.</p>
-    </div>
-
-    <div class="section">
-      <h2>Features</h2>
+    <section>
+      <h2>What Scout does</h2>
       <ul>
-        <li>Search movies, TV shows, and people</li>
-        <li>Save favorites to your watchlist</li>
-        <li>See cast, crew, ratings, and overviews</li>
-        <li>Find streaming availability worldwide</li>
-        <li>Trending content updated weekly</li>
+        <li>Ranks what is trending this week, filtered by kind and genre</li>
+        <li>Searches films, series and people at once</li>
+        <li>Opens a profile for anyone in a cast or crew, and every title they worked on</li>
+        <li>Saves titles to a watchlist and tracks what you have watched</li>
+        <li>Shows which subscription services carry a title, country by country</li>
       </ul>
-    </div>
+    </section>
 
-    <div class="section">
-      <h2>Frequently Asked Questions</h2>
-      <p><strong>Where does the data come from?</strong><br>Scout uses TMDB (The Movie Database) for movie and TV show information, including streaming availability.</p>
-      <p style="margin-top: 12px"><strong>Do I need an account?</strong><br>No account is needed. Your watchlist is stored locally on your device.</p>
-      <p style="margin-top: 12px"><strong>Is Scout free?</strong><br>Yes, Scout is completely free with no ads or in-app purchases.</p>
-    </div>
+    <section>
+      <h2>Questions</h2>
+      <ul>
+        <li>
+          <span class="q">Where does the data come from?</span>
+          Films, series, people and streaming availability all come from TMDB.
+        </li>
+        <li>
+          <span class="q">Do I need an account?</span>
+          No. Your watchlist is stored on your device and never leaves it.
+        </li>
+        <li>
+          <span class="q">My watchlist disappeared.</span>
+          It lives in this browser's storage. Clearing site data, or opening Scout in a different browser or a private window, will show an empty list.
+        </li>
+        <li>
+          <span class="q">A title says no service carries it.</span>
+          Scout only lists subscription streaming. A title available to rent or buy shows nothing here.
+        </li>
+        <li>
+          <span class="q">What does Scout cost?</span>
+          Nothing. No ads, no purchases.
+        </li>
+      </ul>
+    </section>
 
     <div class="contact">
-      <h2>Contact Support</h2>
-      <p>If you have questions, feedback, or need help, please contact us:</p>
-      <p><strong>Email:</strong> <a href="mailto:pablofeldman90@gmail.com">pablofeldman90@gmail.com</a></p>
+      <h2>Still stuck</h2>
+      <p>Write with what you did and what you saw, and it gets looked at.</p>
+      <p><a href="mailto:pablofeldman90@gmail.com">pablofeldman90@gmail.com</a></p>
     </div>
+
+    <p class="foot">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
   </div>
 </body>
 </html>
